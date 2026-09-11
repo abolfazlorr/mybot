@@ -9,12 +9,16 @@ from telegram import (
     KeyboardButton,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
 )
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
+    ConversationHandler,
     filters,
 )
 
@@ -22,6 +26,9 @@ BOT_TOKEN = "8842347974:AAHi_cTuZ85fjKIuW4AVEYJIwX159Nm1cwY"
 DB_PATH = "nearby_users.db"
 
 LOCATION_NOISE = 0.005
+
+# تعریف وضعیت برای ConversationHandler جهت دریافت متن پیام ناشناس
+WAITING_FOR_MESSAGE = 1
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -64,7 +71,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔹 /nearby — افراد نزدیک خودت رو ببین\n"
         "🔹 /stop — خودت رو از لیست حذف کن\n\n"
         "🔒 برای حفظ حریم خصوصی، مکان دقیق هیچ‌کس نشون داده نمی‌شه، "
-        "فقط فاصله‌ی تقریبی."
+        "فقط فاصله‌ی تقریبی و امکان ارسال پیام ناشناس."
     )
     await update.message.reply_text(text)
 
@@ -137,20 +144,63 @@ async def nearby(update: Update, context: ContextTypes.DEFAULT_TYPE):
     distances = []
     for uid, username, first_name, lat, lon in others:
         dist = haversine_km(my_lat, my_lon, lat, lon)
-        distances.append((dist, username, first_name))
+        distances.append((uid, dist, first_name))
 
-    distances.sort(key=lambda x: x[0])
+    distances.sort(key=lambda x: x[1])
 
-    lines = ["📍 افراد نزدیک شما:\n"]
-    for dist, username, first_name in distances[:15]:
+    for uid, dist, first_name in distances[:15]:
         name = first_name or "کاربر ناشناس"
-        if username:
-            contact = f"@{username}"
-        else:
-            contact = "بدون یوزرنیم (نمی‌توان مستقیم پیام داد)"
-        lines.append(f"👤 {name} — تقریباً {dist:.1f} کیلومتر — {contact}")
+        
+        # ساخت دکمه شیشه‌ای ارسال پیام برای هر کاربر
+        keyboard = [[InlineKeyboardButton("✉️ ارسال پیام ناشناس", callback_data=f"msg_{uid}")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"👤 {name} — تقریباً {dist:.1f} کیلومتر",
+            reply_markup=reply_markup
+        )
 
-    await update.message.reply_text("\n".join(lines))
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data.startswith("msg_"):
+        target_user_id = query.data.split("_")[1]
+        context.user_data["target_user_id"] = target_user_id
+
+        await query.message.reply_text(
+            "✍️ لطفاً متن پیام ناشناس خود را بفرستید تا برای این کاربر ارسال شود:\n"
+            "(یا برای لغو، دستور /cancel را بفرستید)"
+        )
+        return WAITING_FOR_MESSAGE
+
+
+async def receive_anonymous_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target_user_id = context.user_data.get("target_user_id")
+    text_to_send = update.message.text
+
+    if not target_user_id:
+        await update.message.reply_text("❌ خطایی رخ داد. لطفاً دوباره از /nearby شروع کنید.")
+        return ConversationHandler.END
+
+    try:
+        await context.bot.send_message(
+            chat_id=int(target_user_id),
+            text=f"📩 یک پیام ناشناس جدید دریافت کردید:\n\n{text_to_send}"
+        )
+        await update.message.reply_text("✅ پیام ناشناس شما با موفقیت ارسال شد.")
+    except Exception as e:
+        await update.message.reply_text("❌ ارسال پیام ناموفق بود (احتمالاً کاربر ربات را بلاک کرده یا استارت نکرده است).")
+
+    context.user_data.pop("target_user_id", None)
+    return ConversationHandler.END
+
+
+async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop("target_user_id", None)
+    await update.message.reply_text("❌ عملیات لغو شد.")
+    return ConversationHandler.END
 
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -167,46 +217,27 @@ def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # مدیریت روند ارسال پیام ناشناس با ConversationHandler
+    conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(button_callback, pattern="^msg_.*")],
+        states={
+            WAITING_FOR_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_anonymous_message)
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+    )
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("share", share_location))
     app.add_handler(CommandHandler("nearby", nearby))
     app.add_handler(CommandHandler("stop", stop))
+    app.add_handler(conv_handler)
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
 
-    print("ربات در حال اجراست... برای توقف Ctrl+C را بزنید.")
+    print("ربات در حال اجراست...")
     app.run_polling()
 
 
 if __name__ == "__main__":
     main()
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-
-# ۱. این بخش را موقع نمایش دادن لیست افراد نزدیک (جایی که فاصله را نشان می‌دهی) بگذار:
-def show_nearby_users(chat_id, target_user_id, name, distance):
-    markup = InlineKeyboardMarkup()
-    # target_user_id همان آیدی عددی شخصی است که پیدا شده
-    btn = InlineKeyboardButton("✉️ ارسال پیام به این شخص", callback_data=f"msg_{target_user_id}")
-    markup.add(btn)
-    
-    bot.send_message(chat_id, f"👤 {name} - تقریباً {distance} کیلومتر", reply_markup=markup)
-
-
-# ۲. این بخش را برای مدیریت کلیک روی دکمه و ارسال پیام اضافه کن:
-@bot.callback_query_handler(func=lambda call: call.data.startswith('msg_'))
-def handle_message_callback(call):
-    target_id = call.data.split('_')[1]
-    
-    # از کاربر می‌خواهیم متن پیامش را بفرستد
-    msg = bot.send_message(call.message.chat.id, "لطفاً متن پیام خود را بفرستید تا به صورت ناشناس برای این کاربر ارسال شود:")
-    bot.register_next_step_handler(msg, send_to_target, target_id)
-
-
-def send_to_target(message, target_id):
-    text_to_send = f"📩 یک پیام ناشناس جدید:\n\n{message.text}"
-    
-    try:
-        # ارسال پیام به کاربر مقصد
-        bot.send_message(target_id, text_to_send)
-        bot.reply_to(message, "✅ پیام شما با موفقیت ارسال شد.")
-    except Exception as e:
-        bot.reply_to(message, "❌ ارسال پیام ناموفق بود (احتمالاً کاربر ربات را استارت نکرده یا بلاک کرده است).")
