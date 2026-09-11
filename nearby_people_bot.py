@@ -179,3 +179,34 @@ def main():
 
 if __name__ == "__main__":
     main()
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+# ۱. این بخش را موقع نمایش دادن لیست افراد نزدیک (جایی که فاصله را نشان می‌دهی) بگذار:
+def show_nearby_users(chat_id, target_user_id, name, distance):
+    markup = InlineKeyboardMarkup()
+    # target_user_id همان آیدی عددی شخصی است که پیدا شده
+    btn = InlineKeyboardButton("✉️ ارسال پیام به این شخص", callback_data=f"msg_{target_user_id}")
+    markup.add(btn)
+    
+    bot.send_message(chat_id, f"👤 {name} - تقریباً {distance} کیلومتر", reply_markup=markup)
+
+
+# ۲. این بخش را برای مدیریت کلیک روی دکمه و ارسال پیام اضافه کن:
+@bot.callback_query_handler(func=lambda call: call.data.startswith('msg_'))
+def handle_message_callback(call):
+    target_id = call.data.split('_')[1]
+    
+    # از کاربر می‌خواهیم متن پیامش را بفرستد
+    msg = bot.send_message(call.message.chat.id, "لطفاً متن پیام خود را بفرستید تا به صورت ناشناس برای این کاربر ارسال شود:")
+    bot.register_next_step_handler(msg, send_to_target, target_id)
+
+
+def send_to_target(message, target_id):
+    text_to_send = f"📩 یک پیام ناشناس جدید:\n\n{message.text}"
+    
+    try:
+        # ارسال پیام به کاربر مقصد
+        bot.send_message(target_id, text_to_send)
+        bot.reply_to(message, "✅ پیام شما با موفقیت ارسال شد.")
+    except Exception as e:
+        bot.reply_to(message, "❌ ارسال پیام ناموفق بود (احتمالاً کاربر ربات را استارت نکرده یا بلاک کرده است).")
