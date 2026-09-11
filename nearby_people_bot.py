@@ -27,7 +27,7 @@ DB_PATH = "nearby_users.db"
 
 LOCATION_NOISE = 0.005
 
-# تعریف وضعیت برای ConversationHandler جهت دریافت متن پیام ناشناس
+# تعریف وضعیت برای ConversationHandler جهت دریافت پیام‌های ناشناس مداوم
 WAITING_FOR_MESSAGE = 1
 
 logging.basicConfig(
@@ -71,7 +71,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔹 /nearby — افراد نزدیک خودت رو ببین\n"
         "🔹 /stop — خودت رو از لیست حذف کن\n\n"
         "🔒 برای حفظ حریم خصوصی، مکان دقیق هیچ‌کس نشون داده نمی‌شه، "
-        "فقط فاصله‌ی تقریبی و امکان ارسال پیام ناشناس."
+        "فقط فاصله‌ی تقریبی و امکان چت ناشناس."
     )
     await update.message.reply_text(text)
 
@@ -151,8 +151,8 @@ async def nearby(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for uid, dist, first_name in distances[:15]:
         name = first_name or "کاربر ناشناس"
         
-        # ساخت دکمه شیشه‌ای ارسال پیام برای هر کاربر
-        keyboard = [[InlineKeyboardButton("✉️ ارسال پیام ناشناس", callback_data=f"msg_{uid}")]]
+        # ساخت دکمه شیشه‌ای شروع چت ناشناس
+        keyboard = [[InlineKeyboardButton("💬 شروع چت ناشناس", callback_data=f"msg_{uid}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
@@ -170,8 +170,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["target_user_id"] = target_user_id
 
         await query.message.reply_text(
-            "✍️ لطفاً متن پیام ناشناس خود را بفرستید تا برای این کاربر ارسال شود:\n"
-            "(یا برای لغو، دستور /cancel را بفرستید)"
+            "💬 حالت چت ناشناس برقرار شد!\n"
+            "هر پیامی بفرستید برای این کاربر ارسال می‌شود.\n"
+            "هر زمان خواستید این گفتگو را تمام کنید، دستور /cancel را بفرستید."
         )
         return WAITING_FOR_MESSAGE
 
@@ -187,19 +188,19 @@ async def receive_anonymous_message(update: Update, context: ContextTypes.DEFAUL
     try:
         await context.bot.send_message(
             chat_id=int(target_user_id),
-            text=f"📩 یک پیام ناشناس جدید دریافت کردید:\n\n{text_to_send}"
+            text=f"📩 پیام ناشناس:\n\n{text_to_send}"
         )
-        await update.message.reply_text("✅ پیام ناشناس شما با موفقیت ارسال شد.")
+        await update.message.reply_text("✅ ارسال شد. پیام بعدی را بفرستید یا /cancel را بزنید.")
     except Exception as e:
-        await update.message.reply_text("❌ ارسال پیام ناموفق بود (احتمالاً کاربر ربات را بلاک کرده یا استارت نکرده است).")
+        await update.message.reply_text("❌ ارسال پیام ناموفق بود (احتمالاً کاربر ربات را بلاک کرده است).")
 
-    context.user_data.pop("target_user_id", None)
-    return ConversationHandler.END
+    # مکالمه را بسته نگه می‌داریم تا کاربر بتواند پیام‌های بعدی را هم بفرستد
+    return WAITING_FOR_MESSAGE
 
 
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("target_user_id", None)
-    await update.message.reply_text("❌ عملیات لغو شد.")
+    await update.message.reply_text("❌ چت ناشناس به پایان رسید.")
     return ConversationHandler.END
 
 
@@ -217,7 +218,7 @@ def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # مدیریت روند ارسال پیام ناشناس با ConversationHandler
+    # مدیریت چت ناشناس پیوسته
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(button_callback, pattern="^msg_.*")],
         states={
